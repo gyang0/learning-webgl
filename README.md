@@ -1,2 +1,4 @@
-# webgl-fractals
-Learning a bit of WebGL (is that what you call it?)
+# A few random things using WebGL2
+References:
+- https://iquilezles.org/
+- https://webgl2fundamentals.org/webgl/lessons/webgl-getting-webgl2.html
