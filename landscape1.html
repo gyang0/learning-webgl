@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>Baby Earth</title>
+    </head>
+
+    <style>
+        #glCanvas {
+            border: 2px solid black;
+        }
+    </style>
+    
+    <canvas id="glCanvas" width="600px" height = "600px"></canvas>
+
+    <body>
+        <!--
+            Slow computers might have difficulty loading.
+            
+            Resources:
+                https://inspirnathan.com/posts/53-shadertoy-tutorial-part-7
+                https://inspirnathan.com/posts/57-shadertoy-tutorial-part-11
+                
+                https://www.shadertoy.com/view/4ttSWf
+                https://www.shadertoy.com/view/4dffRH
+                https://iquilezles.org/articles/morenoise/
+                https://iquilezles.org/articles/rmshadows/
+        -->
+    </body>
+
+    <!-- Vertex shader -->
+    <script id="vertex-shader" type="glsl">#version 300 es
+        in vec4 a_position;
+
+        void main(){
+            gl_Position = a_position;
+        }
+    </script>
+
+    <!-- Fragment shader -->
+    <script id="fragment-shader" type="glsl">#version 300 es
+        precision highp float;
+        out vec4 outColor;
+
+        uniform vec2 iResolution; // Screen size <x, y>
+        uniform float iTime; // Time elapsed since start
+
+        // Raymarching setup
+        const int MAX_RAYMARCH_STEPS = 225;
+        const float SCENE_START = 0.0;
+        const float SCENE_END = 20.0;
+        const float EPSILON = 0.001;
+
+        // Material structure
+        // Uses the Phong lighting model
+        struct Material {
+            vec3 ambientCol;
+            vec3 diffuseCol;
+            vec3 specularCol;
+            float shininess;
+        };
+
+        // Surface structure
+        struct Surface {
+            float dist; // Distance to surface from camera
+            float ID; // The ID of the surface (multiples of 0.5)
+        };
+
+        // Some matrix values I don't understand, from Inigo Quilez
+        // https://www.shadertoy.com/view/4ttSWf
+        const mat3 m3  = mat3( 0.00,  0.80,  0.60,
+                              -0.80,  0.36, -0.48,
+                              -0.60, -0.48,  0.64 );
+        const mat3 m3i = mat3( 0.00, -0.80, -0.60,
+                               0.80,  0.36, -0.48,
+                               0.60, -0.48,  0.64 );
+
+        // Hash method by Inigo Quilez
+        // https://www.shadertoy.com/view/4dffRH
+        vec3 hash(in vec3 p){
+            p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+                     dot(p, vec3(269.5, 183.3, 246.1)),
+                     dot(p, vec3(113.5, 271.9, 124.6)));
+
+            return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+        }
+
+        // 3D noise and its derivatives, by Inigo Quilez
+        // https://iquilezles.org/articles/morenoise/
+        vec4 noised( in vec3 x ){
+            vec3 i = floor(x);
+            vec3 f = fract(x);
+            
+            // cubic interpolant
+            vec3 u = f * f * (3.0 - 2.0 * f);
+            vec3 du = 6.0 * f * (1.0 - f);
+
+            // gradients
+            vec3 ga = hash(i + vec3(0.0, 0.0, 0.0));
+            vec3 gb = hash(i + vec3(1.0, 0.0, 0.0));
+            vec3 gc = hash(i + vec3(0.0, 1.0, 0.0));
+            vec3 gd = hash(i + vec3(1.0, 1.0, 0.0));
+            vec3 ge = hash(i + vec3(0.0, 0.0, 1.0));
+            vec3 gf = hash(i + vec3(1.0, 0.0, 1.0));
+            vec3 gg = hash(i + vec3(0.0, 1.0, 1.0));
+            vec3 gh = hash(i + vec3(1.0, 1.0, 1.0));
+            
+            // projections
+            float va = dot(ga, f - vec3(0.0, 0.0, 0.0));
+            float vb = dot(gb, f - vec3(1.0, 0.0, 0.0));
+            float vc = dot(gc, f - vec3(0.0, 1.0, 0.0));
+            float vd = dot(gd, f - vec3(1.0, 1.0, 0.0));
+            float ve = dot(ge, f - vec3(0.0, 0.0, 1.0));
+            float vf = dot(gf, f - vec3(1.0, 0.0, 1.0));
+            float vg = dot(gg, f - vec3(0.0, 1.0, 1.0));
+            float vh = dot(gh, f - vec3(1.0, 1.0, 1.0));
+            
+            // interpolations
+            return vec4(
+                va + u.x*(vb - va) + u.y*(vc - va) + u.z*(ve - va) + u.x*u.y*(va - vb - vc + vd) + u.y*u.z*(va - vc - ve + vg) + u.z*u.x*(va - vb - ve + vf) + (-va + vb + vc - vd + ve - vf - vg + vh)*u.x*u.y*u.z,    // value
+
+                ga + u.x*(gb - ga) + u.y*(gc - ga) + u.z*(ge - ga) + u.x*u.y*(ga - gb - gc + gd) + u.y*u.z*(ga - gc - ge + gg) + u.z*u.x*(ga - gb - ge + gf) + (-ga + gb + gc - gd + ge - gf - gg + gh)*u.x*u.y*u.z +   // derivatives
+
+                du * (vec3(vb, vc, ve) - va + u.yzx*vec3(va - vb - vc + vd, va - vc - ve + vg, va - vb - ve + vf) + u.zxy*vec3(va - vb - ve + vf, va - vb - vc + vd, va - vc - ve + vg) + u.yzx*u.zxy*(-va + vb + vc - vd + ve - vf - vg + vh))
+            );
+        }
+
+        // 3D FBM, by Inigo Quilez
+        // Modified slightly to return only the value of the FBM, not the derivatives.
+        // https://iquilezles.org/articles/morenoise/
+        float fbm(in vec3 x, int octaves){
+            float f = 1.98;
+            float s = 0.49;
+            float a = 0.0;
+            float b = 0.5;
+
+            vec3 d = vec3(0.0);
+            mat3 m = mat3(1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0);
+
+            for(int i = 0; i < octaves; i++){
+                vec4 n = noised(x);
+                a += b * n.x;               // accumulate values
+                d += b * m * n.yzw;         // accumulate derivatives
+                b *= s;
+                x = f * m3 * x;
+                m = f * m3i * m;
+            }
+
+            return a;
+        }
+
+        // Background color
+        vec3 backgroundCol = vec3(0);
+
+        // Material for mountain
+        // pos = Point on the surface
+        // This is after all the raymarching, when determining colors.
+        Material mountain(vec3 pos){
+            return Material(
+                backgroundCol,
+                0.5 * vec3(1.2 + 1.1*pos.y),
+                vec3(0),
+                20.0
+            );
+        }
+
+        // Material for lava
+        // pos = Point on the surface
+        Material lava(vec3 pos){
+            return Material(
+                backgroundCol,
+                vec3(1.0, 0.0, 0.0),
+                vec3(0.9, 0.5, 0.5),
+                1.0
+            );
+        }
+
+        // SDFs
+        float sdfMountain(vec3 p){
+            return p.y + 1.0 + fbm(p * 0.7, 6) * 2.5;
+        }
+
+        float sdfLava(vec3 p){
+            return p.y + 1.05 + fbm(p * 4.0, 3) * 0.1;
+        }
+        
+
+        // Minimum for Surfaces
+        Surface surfaceMin(Surface s1, Surface s2){
+            if(s1.dist < s2.dist) return s1;
+            else return s2;
+        }
+
+        // Scene that contains all our objects
+        Surface sdfScene(vec3 p){
+            Surface mountain = Surface(sdfMountain(p), 0.5); // ID 0.5 = mountain
+            Surface lava = Surface(sdfLava(p), 1.5); // ID 1.5 = lava
+
+            return surfaceMin(mountain, lava);
+        }
+
+        // Raymarch the scene
+        // ro = ray origin, rd = ray direction
+        Surface raymarch(vec3 ro, vec3 rd){
+            float totalDist = SCENE_START;
+
+            // Closest surface to ray
+            Surface closest;
+
+            for(int i = 0; i < MAX_RAYMARCH_STEPS; i++){
+                vec3 p = ro + rd*totalDist;
+                closest = sdfScene(p);
+
+                totalDist += closest.dist;
+                if(closest.dist < EPSILON || totalDist > SCENE_END)
+                    break;
+            }
+
+            return Surface(totalDist, closest.ID);
+        }
+
+        // Estimates the normal of a surface
+        vec3 calcNormal(vec3 p){
+            return normalize(vec3(
+                sdfScene(vec3(p.x + EPSILON, p.y, p.z)).dist - sdfScene(vec3(p.x - EPSILON, p.y, p.z)).dist,
+                sdfScene(vec3(p.x, p.y + EPSILON, p.z)).dist - sdfScene(vec3(p.x, p.y - EPSILON, p.z)).dist,
+                sdfScene(vec3(p.x, p.y, p.z + EPSILON)).dist - sdfScene(vec3(p.x, p.y, p.z - EPSILON)).dist
+            ));
+        }
+
+        // Soft shadows
+        // Adapted from https://iquilezles.org/articles/rmshadows/
+        float softShadow(vec3 ro, vec3 rd, float mint, float maxt){
+            float res = 1.0;
+            float t = mint;
+
+            for(int i = 0; i < 16; i++){
+                float h = sdfScene(ro + rd*t).dist;
+                t += clamp(h, 0.02, 0.1);
+
+                if(h < EPSILON || t > maxt) break;
+            }
+
+            return clamp(res, 0.0, 1.0);
+        }
+
+        // Phong lighting
+        // From https://inspirnathan.com/posts/57-shadertoy-tutorial-part-11
+        vec3 phong(vec3 lightDir, vec3 normal, vec3 rd, Material mat){
+            // 1. Ambient
+            vec3 ambient = mat.ambientCol;
+            
+            // 2. Diffuse
+            vec3 diffuse = clamp(dot(lightDir, normal), 0.0, 1.0) * mat.diffuseCol;
+
+            // 3. Specular
+            float dotRV = clamp(dot(reflect(lightDir, normal), -rd), 0.0, 1.0);
+            vec3 specular = pow(dotRV, mat.shininess) * mat.specularCol;
+
+            return ambient + diffuse + specular;
+        }
+
+        // Renders the scene if the raymarching found something.
+        // Returns the color to display.
+        vec3 render(vec3 ro, vec3 rd, Surface closest){
+            vec3 col = vec3(0);
+
+            // Point on surface
+            vec3 pos = ro + rd * closest.dist;
+            vec3 normal = calcNormal(pos);
+
+            // Light (okay, now we define the rest)
+            vec3 lightPos = vec3(0, 2, 3);
+            vec3 lightDir = normalize(lightPos - pos);
+            float lightIntensity = 1.5;
+
+            // Apply shadows
+            float shadow = clamp(softShadow(pos, lightDir, 0.02, 2.5), 0.3, 1.0);
+
+            //col = lightIntensity * phong(lightDir, normal, rd, closest.mat);
+            //col *= shadow;
+
+            if(closest.ID > 1.0)  col = lightIntensity * phong(lightDir, normal, rd, lava(pos)); // Lava
+            else if(closest.ID > 0.0) col = lightIntensity * phong(lightDir, normal, rd, mountain(pos)); // Mountain
+
+            col *= shadow;
+
+            // ^ This looks promising
+            //col = vec3(pos.y * -0.2, pos.y * -0.5, 0);
+
+            // Background fog
+            col = mix(col, backgroundCol, 1.0 - exp(-EPSILON * closest.dist*closest.dist*closest.dist));
+
+            return col;
+        }
+
+
+        void main(){
+            // Viewpoint
+            vec2 uv = gl_FragCoord.xy/iResolution.xy;
+            uv -= 0.5;
+            uv.x *= iResolution.x/iResolution.y;
+
+            // Color to output
+            vec3 col = vec3(0);
+
+            // Raymarch
+            vec3 ro = vec3(0, 0, 5);
+            vec3 rd = normalize(vec3(uv, -1));
+            Surface closest = raymarch(ro, rd);
+
+            if(closest.dist > SCENE_END) col = backgroundCol;
+            else col = render(ro, rd, closest);
+
+            outColor = vec4(col, 1.0);
+        }
+    </script>
+
+    <!-- Program -->
+    <script>
+        function createShader(gl, type, source){
+            var shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            var success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+            if(!success){
+                console.log("createShader(): " + gl.getShaderInfoLog(shader));
+                return undefined;
+            }
+
+            return shader;
+        }
+
+        function createProgram(gl, vertexShader, fragmentShader){
+            var program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+
+            var success = gl.getProgramParameter(program, gl.LINK_STATUS);
+            if(!success){
+                console.log("createProgram(): " + gl.getProgramInfoLog(program));
+                return undefined;
+            }
+
+            return program;
+        }
+
+        // Canvas
+        var canvas = document.querySelector("#glCanvas");
+        var gl = canvas.getContext("webgl2");
+        if(!gl){
+            console.log("No WebGL");
+        } else {
+            // Create shaders
+            var vertexShaderSource = document.querySelector("#vertex-shader").text;
+            var fragmentShaderSource = document.querySelector("#fragment-shader").text;
+
+            var vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+            var fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+            // Link shaders
+            var program = createProgram(gl, vertexShader, fragmentShader);
+
+            var positionAttribLocation = gl.getAttribLocation(program, "a_position");
+            var positionBuffer = gl.createBuffer();
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+
+            var positions = [
+                -1, -1,  1, -1,  1,  1,
+                -1, -1,  1,  1, -1,  1
+            ];
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+            var vao = gl.createVertexArray();
+            gl.bindVertexArray(vao);
+            gl.enableVertexAttribArray(positionAttribLocation);
+            gl.vertexAttribPointer(positionAttribLocation, 2, gl.FLOAT, false, 0, 0);
+
+            // Canvas
+            gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+
+            gl.useProgram(program);
+            gl.bindVertexArray(vao);
+
+
+            // Set screen size
+            var iResolutionLoc = gl.getUniformLocation(program, "iResolution");
+            gl.uniform2f(iResolutionLoc, canvas.width, canvas.height);
+
+            // For setting the time elapsed
+            var iTimeLoc = gl.getUniformLocation(program, "iTime");
+
+            function render(/*t*/){
+                gl.clearColor(0, 0, 0, 0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+                gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+                // Set time elapsed
+                //gl.uniform1f(iTimeLoc, t/1000.0);
+
+                //window.requestAnimationFrame(render);
+            }
+            render();
+            //window.requestAnimationFrame(render);
+        }
+        
+    </script>
+</html>
