@@ -10,3 +10,8 @@ References:
 
 This was very helpful:
 - https://inspirnathan.com/posts/49-shadertoy-tutorial-part-3
+
+<br />
+After 2 years of on-and-off trying, my first decent landscape:
+
+<img src="https://github.com/gyang0/learning-webgl/blob/main/images/planet.png" style="width:500px">
