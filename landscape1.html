@@ -6,11 +6,16 @@
     </head>
 
     <style>
+        * {
+            overflow: hidden;
+            margin: 0px;
+            padding: 0px;
+        }
         #glCanvas {
             border: 2px solid black;
         }
     </style>
-    
+
     <canvas id="glCanvas" width="600px" height = "600px"></canvas>
 
     <body>
@@ -28,7 +33,6 @@
         -->
     </body>
 
-    <!-- Vertex shader -->
     <script id="vertex-shader" type="glsl">#version 300 es
         in vec4 a_position;
 
@@ -37,13 +41,12 @@
         }
     </script>
 
-    <!-- Fragment shader -->
     <script id="fragment-shader" type="glsl">#version 300 es
         precision highp float;
         out vec4 outColor;
 
-        uniform vec2 iResolution; // Screen size <x, y>
-        uniform float iTime; // Time elapsed since start
+        uniform vec2 u_resolution; // Screen size <x, y>
+        uniform float u_time; // Time elapsed since start
 
         // Raymarching setup
         const int MAX_RAYMARCH_STEPS = 225;
@@ -75,9 +78,42 @@
                                0.80,  0.36, -0.48,
                                0.60, -0.48,  0.64 );
 
-        // Hash method by Inigo Quilez
+        // 2D random method
+        // A weird mix of fractions and trig
+        // Probably not the best, but it works.
+        float rand2d(in vec2 p){
+            float a = 208.17 * fract(p.x*153.202 + p.y*36.14);
+            return clamp(fract(sin(a) * 511.12), 0.0, 1.0);
+        }
+
+        float perlin2d(in vec2 p){
+            vec2 pos = floor(p);
+            vec2 frac = fract(p);
+
+            vec2 s = smoothstep(0.0, 1.0, frac);
+
+            // The usual: 4 corners and interpolate.
+            float c0 = rand2d(pos + vec2(0.0, 0.0)); // bottom left (original point)
+            float c1 = rand2d(pos + vec2(1.0, 0.0)); // bottom right
+            float c2 = rand2d(pos + vec2(0.0, 1.0)); // top left
+            float c3 = rand2d(pos + vec2(1.0, 1.0)); // top right
+
+            // First interpolate the bottom two points
+            // (1 - s.x)*c0 + s.x*c1
+            float res = mix(c0, c1, s.x);
+
+            // Then add the result from interpolating the top points
+            res += (c2 - c0) * (1.0 - s.x) * s.y;
+            res += (c3 - c1) * s.x * s.y;
+
+            return res;
+        }
+
+
+
+        // 3D hash method by Inigo Quilez
         // https://www.shadertoy.com/view/4dffRH
-        vec3 hash(in vec3 p){
+        vec3 rand3d(in vec3 p){
             p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
                      dot(p, vec3(269.5, 183.3, 246.1)),
                      dot(p, vec3(113.5, 271.9, 124.6)));
@@ -87,7 +123,7 @@
 
         // 3D noise and its derivatives, by Inigo Quilez
         // https://iquilezles.org/articles/morenoise/
-        vec4 noised( in vec3 x ){
+        vec4 noised(in vec3 x){
             vec3 i = floor(x);
             vec3 f = fract(x);
             
@@ -96,14 +132,14 @@
             vec3 du = 6.0 * f * (1.0 - f);
 
             // gradients
-            vec3 ga = hash(i + vec3(0.0, 0.0, 0.0));
-            vec3 gb = hash(i + vec3(1.0, 0.0, 0.0));
-            vec3 gc = hash(i + vec3(0.0, 1.0, 0.0));
-            vec3 gd = hash(i + vec3(1.0, 1.0, 0.0));
-            vec3 ge = hash(i + vec3(0.0, 0.0, 1.0));
-            vec3 gf = hash(i + vec3(1.0, 0.0, 1.0));
-            vec3 gg = hash(i + vec3(0.0, 1.0, 1.0));
-            vec3 gh = hash(i + vec3(1.0, 1.0, 1.0));
+            vec3 ga = rand3d(i + vec3(0.0, 0.0, 0.0));
+            vec3 gb = rand3d(i + vec3(1.0, 0.0, 0.0));
+            vec3 gc = rand3d(i + vec3(0.0, 1.0, 0.0));
+            vec3 gd = rand3d(i + vec3(1.0, 1.0, 0.0));
+            vec3 ge = rand3d(i + vec3(0.0, 0.0, 1.0));
+            vec3 gf = rand3d(i + vec3(1.0, 0.0, 1.0));
+            vec3 gg = rand3d(i + vec3(0.0, 1.0, 1.0));
+            vec3 gh = rand3d(i + vec3(1.0, 1.0, 1.0));
             
             // projections
             float va = dot(ga, f - vec3(0.0, 0.0, 0.0));
@@ -151,8 +187,10 @@
             return a;
         }
 
+
         // Background color
         vec3 backgroundCol = vec3(0);
+
 
         // Material for mountain
         // pos = Point on the surface
@@ -160,7 +198,7 @@
         Material mountain(vec3 pos){
             return Material(
                 backgroundCol,
-                0.5 * vec3(1.2 + 1.1*pos.y),
+                0.5 * vec3(1.1 + pos.y),
                 vec3(0),
                 20.0
             );
@@ -179,11 +217,13 @@
 
         // SDFs
         float sdfMountain(vec3 p){
+            //return p.y + 0.8;
             return p.y + 1.0 + fbm(p * 0.7, 6) * 2.5;
         }
 
         float sdfLava(vec3 p){
-            return p.y + 1.05 + fbm(p * 4.0, 3) * 0.1;
+            //return p.y + 0.85;
+            return p.y + 1.05 + fbm(p * 4.0, 2) * 0.1;
         }
         
 
@@ -262,6 +302,18 @@
             return ambient + diffuse + specular;
         }
 
+        vec3 renderBackground(vec2 uv){
+            //if(noise2d(uv) < 0.3) return vec3(1, 1, 0);
+            //return vec3(rand2d(uv));
+            //if(uv.x < 0.0) return vec3(rand2d(uv));
+            // Stars
+            float noisy = perlin2d(uv * 6.0);
+            if(rand2d(uv) > 0.99) return vec3(noisy * 1.2, noisy * 1.2, 0);
+            
+            // Red streaks
+            return mix(backgroundCol, vec3(noisy, 0.0, 0), 0.15);
+        }
+
         // Renders the scene if the raymarching found something.
         // Returns the color to display.
         vec3 render(vec3 ro, vec3 rd, Surface closest){
@@ -279,16 +331,10 @@
             // Apply shadows
             float shadow = clamp(softShadow(pos, lightDir, 0.02, 2.5), 0.3, 1.0);
 
-            //col = lightIntensity * phong(lightDir, normal, rd, closest.mat);
-            //col *= shadow;
-
             if(closest.ID > 1.0)  col = lightIntensity * phong(lightDir, normal, rd, lava(pos)); // Lava
             else if(closest.ID > 0.0) col = lightIntensity * phong(lightDir, normal, rd, mountain(pos)); // Mountain
 
             col *= shadow;
-
-            // ^ This looks promising
-            //col = vec3(pos.y * -0.2, pos.y * -0.5, 0);
 
             // Background fog
             col = mix(col, backgroundCol, 1.0 - exp(-EPSILON * closest.dist*closest.dist*closest.dist));
@@ -299,19 +345,19 @@
 
         void main(){
             // Viewpoint
-            vec2 uv = gl_FragCoord.xy/iResolution.xy;
+            vec2 uv = gl_FragCoord.xy/u_resolution.xy;
             uv -= 0.5;
-            uv.x *= iResolution.x/iResolution.y;
+            uv.x *= u_resolution.x/u_resolution.y;
 
             // Color to output
             vec3 col = vec3(0);
 
             // Raymarch
-            vec3 ro = vec3(0, 0, 5);
+            vec3 ro = vec3(0.0, 0.0, 5.0);
             vec3 rd = normalize(vec3(uv, -1));
             Surface closest = raymarch(ro, rd);
 
-            if(closest.dist > SCENE_END) col = backgroundCol;
+            if(closest.dist > SCENE_END) col = renderBackground(uv);
             else col = render(ro, rd, closest);
 
             outColor = vec4(col, 1.0);
@@ -389,11 +435,11 @@
 
 
             // Set screen size
-            var iResolutionLoc = gl.getUniformLocation(program, "iResolution");
-            gl.uniform2f(iResolutionLoc, canvas.width, canvas.height);
+            var u_resolutionLoc = gl.getUniformLocation(program, "u_resolution");
+            gl.uniform2f(u_resolutionLoc, canvas.width, canvas.height);
 
             // For setting the time elapsed
-            var iTimeLoc = gl.getUniformLocation(program, "iTime");
+            var u_timeLoc = gl.getUniformLocation(program, "u_time");
 
             function render(/*t*/){
                 gl.clearColor(0, 0, 0, 0);
@@ -401,7 +447,7 @@
                 gl.drawArrays(gl.TRIANGLES, 0, 6);
 
                 // Set time elapsed
-                //gl.uniform1f(iTimeLoc, t/1000.0);
+                //gl.uniform1f(u_timeLoc, t/1000.0);
 
                 //window.requestAnimationFrame(render);
             }
